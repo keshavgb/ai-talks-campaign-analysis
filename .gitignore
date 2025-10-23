@@ -1,0 +1,13 @@
+# Virtual environments and caches
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.matplotlib_cache/
+
+# OS/editor files
+.DS_Store
+.vscode/
+
+# Data that shouldn't be versioned
+data/raw/
+data/ai_talks.sqlite
