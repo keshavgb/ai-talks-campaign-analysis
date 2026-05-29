@@ -78,7 +78,7 @@ def generate_executive_summary_pdf(out_path: Path) -> None:
         FIGURES_DIR / "top_videos_by_views.png",
         FIGURES_DIR / "traffic_sources.png",
         FIGURES_DIR / "top_countries.png",
-        FIGURES_DIR / "subs_over_time.png",
+        FIGURES_DIR / "views_over_time.png",
         FIGURES_DIR / "subscriber_breakdown.png",
     ]
     for fig in figures:
@@ -121,7 +121,7 @@ def generate_insights_pptx(out_path: Path) -> None:
         ("Top Videos by Views", "top_videos_by_views.png"),
         ("Traffic Sources", "traffic_sources.png"),
         ("Top Countries", "top_countries.png"),
-        ("Subscribers Over Time", "subs_over_time.png"),
+        ("Views Over Time", "views_over_time.png"),
         ("Subscriber Breakdown", "subscriber_breakdown.png"),
     ]:
         path = FIGURES_DIR / filename

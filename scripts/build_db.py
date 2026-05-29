@@ -16,6 +16,14 @@ TABLE_MAP = {
     "content": {
         "path": FILES["content"],
         "table": "content",
+        # Map the YouTube-export column names to our snake_case schema.
+        # The raw export does not include a `likes` field for this channel.
+        "rename": {
+            "Content": "video_id",
+            "Video title": "title",
+            "Views from playlist": "views",
+            "Duration": "avg_view_duration",
+        },
         "dtypes": {
             "video_id": "string",
             "title": "string",
@@ -27,6 +35,10 @@ TABLE_MAP = {
     "traffic": {
         "path": FILES["traffic"],
         "table": "traffic",
+        "rename": {
+            "Traffic source": "traffic_source",
+            "Views": "views",
+        },
         "dtypes": {
             "traffic_source": "string",
             "views": "Int64",
@@ -35,6 +47,10 @@ TABLE_MAP = {
     "geography": {
         "path": FILES["geography"],
         "table": "geography",
+        "rename": {
+            "Geography": "country",
+            "Views": "views",
+        },
         "dtypes": {
             "country": "string",
             "views": "Int64",
@@ -43,6 +59,10 @@ TABLE_MAP = {
     "subscriptions": {
         "path": FILES["subscriptions"],
         "table": "subscriptions",
+        "rename": {
+            "Subscription status": "audience_type",
+            "Views": "views",
+        },
         "dtypes": {
             "audience_type": "string",
             "views": "Int64",
@@ -51,9 +71,15 @@ TABLE_MAP = {
     "dates": {
         "path": FILES["dates"],
         "table": "dates",
+        # The daily export carries total views per day, not subscriber gains,
+        # so we expose `views` rather than the original `subs_gained` slot.
+        "rename": {
+            "date": "date",
+            "Views": "views",
+        },
         "dtypes": {
             "date": "datetime64[ns]",
-            "subs_gained": "float",
+            "views": "Int64",
         },
     },
 }
@@ -89,6 +115,19 @@ def build_sqlite(db_path: Path = DB_PATH) -> None:
     try:
         for key, meta in TABLE_MAP.items():
             df = _read_csv_safe(meta["path"])  # type: ignore[arg-type]
+            rename = meta.get("rename") or {}
+            if not df.empty and rename:
+                # If a target column already exists with a different name in the source,
+                # drop the placeholder so the rename can claim it (e.g. extract_from_youtube
+                # adds a `traffic_source` label column that collides with our `Traffic source`
+                # rename target).
+                collisions = [
+                    target for source, target in rename.items()
+                    if source != target and source in df.columns and target in df.columns
+                ]
+                if collisions:
+                    df = df.drop(columns=collisions)
+                df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
             df = _coerce_types(df, meta["dtypes"])  # type: ignore[arg-type]
             # reorder columns to stable schema
             cols = list(meta["dtypes"].keys())

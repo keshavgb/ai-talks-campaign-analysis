@@ -31,10 +31,19 @@ except ModuleNotFoundError:  # seaborn is optional
 # Local project imports (support both `python -m scripts.eda_youtube` and direct execution)
 try:
     from scripts.config import FILES, FIGURES_DIR, REPORTS_DIR
-    from scripts.plotting_utils import savefig, set_wide
+    from scripts.plotting_utils import (
+        PALETTE, THOUSANDS, add_source, add_titles, annotate_bars_h,
+        apply_theme, bar_colors, savefig, set_wide, style_axes,
+    )
 except ModuleNotFoundError:
     from config import FILES, FIGURES_DIR, REPORTS_DIR
-    from plotting_utils import savefig, set_wide
+    from plotting_utils import (
+        PALETTE, THOUSANDS, add_source, add_titles, annotate_bars_h,
+        apply_theme, bar_colors, savefig, set_wide, style_axes,
+    )
+
+# Shared editorial caption used on every chart
+SOURCE_LINE = "Source: YouTube Analytics  ·  AI Talks campaign  ·  Feb–Sep 2025"
 
 RESOLVED: Dict[str, str] = {}
 
@@ -325,54 +334,128 @@ def kpi_table(dfs: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     )
 
 
+# ISO-2 → friendly country name for the small set we currently surface.
+_COUNTRY_NAMES = {
+    "US": "United States", "IN": "India", "ET": "Ethiopia",
+    "GB": "United Kingdom", "CA": "Canada", "AU": "Australia",
+    "DE": "Germany", "FR": "France", "BR": "Brazil", "MX": "Mexico",
+    "NG": "Nigeria", "PK": "Pakistan", "ID": "Indonesia", "PH": "Philippines",
+    "JP": "Japan", "KR": "South Korea", "ES": "Spain", "IT": "Italy",
+    "NL": "Netherlands", "RU": "Russia", "ZA": "South Africa", "EG": "Egypt",
+    "KE": "Kenya", "GH": "Ghana", "TR": "Turkey", "SA": "Saudi Arabia",
+    "AE": "United Arab Emirates", "SG": "Singapore", "MY": "Malaysia",
+}
+
+
+def _normalize_ai(text: str) -> str:
+    """Replace standalone 'Ai' with 'AI' (matches the conventional acronym casing)."""
+    return re.sub(r"\bAi\b", "AI", text)
+
+
+def _short_episode(title: str) -> str:
+    """Strip the 'AI Talks | Episode N:' prefix when present so headlines stay punchy."""
+    short = title.split(":", 1)[1].strip() if ":" in title else title
+    return _normalize_ai(short)
+
+
 def plot_top_videos(content: pd.DataFrame, top_n: int = 10) -> None:
-    """Create a horizontal bar chart summarising the top performing videos."""
+    """Top episodes by playlist-sourced views, ranked horizontal bars."""
     vcol = RESOLVED.get("content.views", "views")
     tcol = RESOLVED.get("content.title", "title")
-    if content.empty or vcol not in content.columns:
+    if content.empty or vcol not in content.columns or tcol not in content.columns:
         return
 
-    df = content.sort_values(vcol, ascending=False).head(top_n).copy()
-    label_col = tcol if tcol in df.columns else "_label"
-    if label_col not in df.columns:
-        df[label_col] = df.index.astype(str)
+    grp = (
+        content.groupby(tcol, as_index=False)[vcol]
+        .sum(min_count=1)
+        .dropna(subset=[vcol])
+        .sort_values(vcol, ascending=False)
+        .head(top_n)
+        .sort_values(vcol, ascending=True)  # ascending so largest sits at top in barh
+    )
+    if grp.empty:
+        return
 
-    set_wide(title=f"Top {top_n} Videos by Views", xlabel="Views", ylabel="Video", rotate_x=0)
-    if HAVE_SEABORN and sns is not None:
-        sns.barplot(data=df, x=vcol, y=label_col)
-    else:
-        plt.barh(df[label_col], df[vcol])
-        plt.gca().invert_yaxis()
+    labels = [_normalize_ai(str(t)) for t in grp[tcol].tolist()]
+    values = grp[vcol].tolist()
+    leader = grp.iloc[-1][tcol]
+
+    apply_theme()
+    height = max(4.5, 0.55 * len(grp) + 3.0)
+    fig, ax = plt.subplots(figsize=(14, height))
+    fig.subplots_adjust(top=0.78, left=0.32, right=0.95, bottom=0.16)
+
+    ax.barh(
+        labels, values,
+        color=bar_colors(labels, highlight={leader}),
+        height=0.72, edgecolor="none",
+    )
+    style_axes(ax)
+    ax.xaxis.set_major_formatter(THOUSANDS)
+    ax.set_xlim(0, max(values) * 1.18)
+    ax.set_xlabel("Playlist-sourced views", labelpad=10)
+    ax.set_ylabel("")
+    annotate_bars_h(ax, values)
+
+    add_titles(
+        fig,
+        title=f"{_short_episode(leader)} leads playlist-sourced views",
+        subtitle="Top episodes by views originating from YouTube playlists",
+    )
+    add_source(fig, SOURCE_LINE)
     savefig(FIGURES_DIR / "top_videos_by_views.png")
 
 
 def plot_traffic_sources(traffic: pd.DataFrame) -> None:
-    """Summarise traffic sources by total views."""
+    """Views by traffic source — External highlighted as the largest contributor."""
     src = RESOLVED.get("traffic.source", "traffic_source")
     vcol = RESOLVED.get("traffic.views", "views")
     if traffic.empty or src not in traffic.columns or vcol not in traffic.columns:
         return
 
-    grp = traffic.groupby(src, as_index=False)[vcol].sum().sort_values(vcol, ascending=False)
-    set_wide(title="Traffic Sources by Views", xlabel="Views", ylabel="Source")
-    if HAVE_SEABORN and sns is not None:
-        sns.barplot(data=grp, x=vcol, y=src)
-    else:
-        plt.barh(grp[src].astype(str), grp[vcol])
-        plt.gca().invert_yaxis()
+    grp = (
+        traffic.groupby(src, as_index=False)[vcol]
+        .sum()
+        .sort_values(vcol, ascending=True)
+    )
+    labels = grp[src].astype(str).tolist()
+    values = grp[vcol].tolist()
+    total = float(sum(values)) or 1.0
+    leader = grp.iloc[-1][src]
+    leader_share = grp.iloc[-1][vcol] / total
+
+    apply_theme()
+    fig, ax = plt.subplots(figsize=(14, 7.5))
+    fig.subplots_adjust(top=0.78, left=0.22, right=0.95, bottom=0.12)
+
+    ax.barh(
+        labels, values,
+        color=bar_colors(labels, highlight={str(leader)}),
+        height=0.72, edgecolor="none",
+    )
+    style_axes(ax)
+    ax.xaxis.set_major_formatter(THOUSANDS)
+    ax.set_xlim(0, max(values) * 1.12)
+    ax.set_xlabel("Views", labelpad=10)
+    ax.set_ylabel("")
+    annotate_bars_h(ax, values)
+
+    add_titles(
+        fig,
+        title=f"{leader} traffic drives {leader_share*100:.0f}% of AI Talks views",
+        subtitle="Views by YouTube traffic source",
+    )
+    add_source(fig, SOURCE_LINE)
     savefig(FIGURES_DIR / "traffic_sources.png")
 
 
 def plot_top_countries(geography: pd.DataFrame, top_n: int = 10) -> None:
-    """Visualise the top countries by view volume."""
+    """Views by viewer country, with ISO codes mapped to readable names."""
     ccol = RESOLVED.get("geo.country", "")
     vcol = RESOLVED.get("geo.views", "")
     if (
-        geography.empty
-        or not ccol
-        or not vcol
-        or ccol not in geography.columns
-        or vcol not in geography.columns
+        geography.empty or not ccol or not vcol
+        or ccol not in geography.columns or vcol not in geography.columns
     ):
         return
 
@@ -382,54 +465,155 @@ def plot_top_countries(geography: pd.DataFrame, top_n: int = 10) -> None:
         .sort_values(vcol, ascending=False)
         .head(top_n)
     )
-    set_wide(title=f"Top {top_n} Countries by Views", xlabel="Views", ylabel="Country")
-    if HAVE_SEABORN and sns is not None:
-        sns.barplot(data=grp, x=vcol, y=ccol)
-    else:
-        plt.barh(grp[ccol].astype(str), grp[vcol])
-        plt.gca().invert_yaxis()
+    if grp.empty:
+        return
+
+    grp[ccol] = grp[ccol].astype(str).map(lambda c: _COUNTRY_NAMES.get(c.upper(), c))
+    grp = grp.sort_values(vcol, ascending=True)
+    labels = grp[ccol].tolist()
+    values = grp[vcol].tolist()
+    total = float(sum(values)) or 1.0
+    leader = grp.iloc[-1][ccol]
+    leader_share = grp.iloc[-1][vcol] / total
+
+    apply_theme()
+    height = max(3.5, 0.7 * len(grp) + 2.8)
+    fig, ax = plt.subplots(figsize=(14, height))
+    fig.subplots_adjust(top=0.74, left=0.22, right=0.95, bottom=0.18)
+
+    ax.barh(
+        labels, values,
+        color=bar_colors(labels, highlight={leader}),
+        height=0.6, edgecolor="none",
+    )
+    style_axes(ax)
+    ax.xaxis.set_major_formatter(THOUSANDS)
+    ax.set_xlim(0, max(values) * 1.18)
+    ax.set_xlabel("Views", labelpad=10)
+    ax.set_ylabel("")
+    annotate_bars_h(ax, values)
+
+    add_titles(
+        fig,
+        title=f"{leader} accounts for {leader_share*100:.0f}% of attributable views",
+        subtitle=f"Views by viewer country  ·  top {len(grp)} of {len(grp)} reported",
+    )
+    add_source(fig, SOURCE_LINE)
     savefig(FIGURES_DIR / "top_countries.png")
 
 
-def plot_subs_over_time(dates: pd.DataFrame) -> None:
-    """Plot subscriber gains over time as a line chart."""
+def plot_views_over_time(dates: pd.DataFrame) -> None:
+    """Daily views across the campaign with a 7-day moving average overlaid."""
     dcol = RESOLVED.get("dates.date", "date")
-    scol = RESOLVED.get("dates.subs", "subs_gained")
-    if dates.empty or dcol not in dates.columns or scol not in dates.columns:
+    if dates.empty or dcol not in dates.columns or "Views" not in dates.columns:
         return
 
-    tmp = dates[[dcol, scol]].dropna().sort_values(dcol)
-    set_wide(title="Subscribers Gained Over Time", xlabel="Date", ylabel="Subs Gained")
-    if HAVE_SEABORN and sns is not None:
-        sns.lineplot(data=tmp, x=dcol, y=scol)
-    else:
-        plt.plot(tmp[dcol], tmp[scol])
-    savefig(FIGURES_DIR / "subs_over_time.png")
+    tmp = dates[[dcol, "Views"]].dropna().sort_values(dcol).copy()
+    if tmp.empty:
+        return
+    tmp["rolling"] = tmp["Views"].rolling(7, min_periods=1).mean()
+
+    peak_idx = tmp["Views"].idxmax()
+    peak_day = tmp.loc[peak_idx, dcol]
+    peak_val = float(tmp.loc[peak_idx, "Views"])
+
+    apply_theme()
+    fig, ax = plt.subplots(figsize=(14, 5.8))
+    fig.subplots_adjust(top=0.78, left=0.08, right=0.95, bottom=0.16)
+
+    ax.bar(
+        tmp[dcol], tmp["Views"],
+        color=PALETTE["context_dk"], width=1.0,
+        label="Daily views", edgecolor="none",
+    )
+    ax.plot(
+        tmp[dcol], tmp["rolling"],
+        color=PALETTE["accent"], linewidth=2.4,
+        label="7-day moving average",
+    )
+
+    # Reverse the grid orientation for a time series
+    style_axes(ax, x_grid=False)
+    ax.grid(axis="y", color=PALETTE["grid"], linewidth=1.0)
+    ax.yaxis.set_major_formatter(THOUSANDS)
+
+    from matplotlib.dates import DateFormatter, MonthLocator
+    ax.xaxis.set_major_locator(MonthLocator())
+    ax.xaxis.set_major_formatter(DateFormatter("%b %Y"))
+
+    ax.set_xlabel("")
+    ax.set_ylabel("Views", labelpad=10)
+    leg = ax.legend(loc="upper right", frameon=False, fontsize=10)
+    for txt in leg.get_texts():
+        txt.set_color(PALETTE["ink_soft"])
+
+    add_titles(
+        fig,
+        title=f"Daily views peaked at {int(peak_val):,} on {peak_day:%b %d, %Y}",
+        subtitle="Total daily views with 7-day moving average",
+    )
+    add_source(fig, SOURCE_LINE)
+    savefig(FIGURES_DIR / "views_over_time.png")
 
 
 def plot_subscriber_breakdown(subscriptions: pd.DataFrame) -> None:
-    """Visualise the relative performance of subscriber segments."""
+    """100%-stacked single bar showing subscriber vs non-subscriber view share."""
     audience_col = RESOLVED.get("subscriptions.audience")
     metric_col = RESOLVED.get("subscriptions.views", "views")
     if (
-        subscriptions.empty
-        or not audience_col
+        subscriptions.empty or not audience_col
         or audience_col not in subscriptions.columns
         or metric_col not in subscriptions.columns
     ):
         return
 
-    grp = (
-        subscriptions.groupby(audience_col, as_index=False)[metric_col]
-        .sum(min_count=1)
-        .sort_values(metric_col, ascending=False)
+    grp = subscriptions.groupby(audience_col)[metric_col].sum(min_count=1)
+    if grp.empty:
+        return
+
+    sub_keys = [k for k in grp.index if "sub" in str(k).lower() and "not" not in str(k).lower()]
+    sub = float(grp[sub_keys].sum()) if sub_keys else 0.0
+    not_sub = float(grp.sum() - sub)
+    total = sub + not_sub
+    if total <= 0:
+        return
+    sub_share = sub / total
+
+    apply_theme()
+    fig, ax = plt.subplots(figsize=(14, 3.0))
+    fig.subplots_adjust(top=0.55, left=0.05, right=0.95, bottom=0.30)
+
+    bar_height = 0.55
+    ax.barh([0], [sub], color=PALETTE["accent"], height=bar_height, edgecolor="none")
+    ax.barh([0], [not_sub], left=[sub], color=PALETTE["context_dk"], height=bar_height, edgecolor="none")
+
+    # Inline labels — accent segment in white, gray segment in ink
+    ax.text(
+        sub / 2, 0,
+        f"Subscribed  ·  {sub_share*100:.0f}%   ({int(sub):,} views)",
+        va="center", ha="center", color="white", fontsize=12, fontweight="semibold",
     )
-    set_wide(title="Subscribed vs Non-Subscribed Audience", xlabel="Views", ylabel="Audience Type")
-    if HAVE_SEABORN and sns is not None:
-        sns.barplot(data=grp, x=metric_col, y=audience_col)
-    else:
-        plt.barh(grp[audience_col].astype(str), grp[metric_col])
-        plt.gca().invert_yaxis()
+    ax.text(
+        sub + not_sub / 2, 0,
+        f"Not subscribed  ·  {(1-sub_share)*100:.0f}%   ({int(not_sub):,} views)",
+        va="center", ha="center", color=PALETTE["ink"], fontsize=12, fontweight="semibold",
+    )
+
+    ax.set_xlim(0, total)
+    ax.set_ylim(-0.6, 0.6)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.grid(False)
+
+    add_titles(
+        fig,
+        title=f"Subscribers contribute {sub_share*100:.0f}% of views — non-subs drive {(1-sub_share)*100:.0f}%",
+        subtitle="View share by audience type",
+        y_title=0.90, y_subtitle=0.74,
+    )
+    add_source(fig, SOURCE_LINE)
     savefig(FIGURES_DIR / "subscriber_breakdown.png")
 
 
@@ -496,7 +680,7 @@ def main() -> None:
     if "geography" in dfs:
         plot_top_countries(dfs["geography"])
     if "dates" in dfs:
-        plot_subs_over_time(dfs["dates"])
+        plot_views_over_time(dfs["dates"])
     if "subscriptions" in dfs:
         plot_subscriber_breakdown(dfs["subscriptions"])
         subs_audience = RESOLVED.get("subscriptions.audience")
